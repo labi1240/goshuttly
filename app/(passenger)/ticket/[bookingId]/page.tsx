@@ -6,6 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { formatMoney, formatDate } from "@/lib/utils";
+import { PaymentPoller } from "@/components/passenger/payment-poller";
 
 export default async function TicketPage({
   params,
@@ -27,6 +28,46 @@ export default async function TicketPage({
   });
 
   if (!booking) notFound();
+
+  if (booking.paymentStatus !== "PAID") {
+    return (
+      <div className="mx-auto max-w-xl px-6 py-10">
+        <div className="text-center mb-6">
+          <Badge variant="warning" className="px-3 py-1 text-sm">
+            Payment Pending
+          </Badge>
+          <h1 className="mt-4 text-2xl font-bold">Awaiting Payment Confirmation</h1>
+          <p className="mt-1 text-sm text-brand-muted">
+            We are waiting for Stripe to confirm your transaction. Your ticket QR code will automatically appear here once confirmed.
+          </p>
+        </div>
+
+        <Card>
+          <CardContent className="p-8 flex flex-col items-center justify-center space-y-6">
+            <div className="h-16 w-16 rounded-full bg-brand-warning/10 flex items-center justify-center border border-brand-warning/20 text-brand-warning">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-8 h-8 animate-spin">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+              </svg>
+            </div>
+            <div className="text-center space-y-1">
+              <span className="text-sm font-semibold block">Order Reference</span>
+              <span className="text-xs font-mono text-brand-muted">{booking.id}</span>
+            </div>
+            <PaymentPoller />
+          </CardContent>
+        </Card>
+
+        <div className="mt-6 flex flex-col gap-2">
+          <Button asChild size="lg">
+            <Link href={`/ticket/${booking.id}`}>Check Status</Link>
+          </Button>
+          <Button asChild variant="ghost">
+            <Link href="/">Book another trip</Link>
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   const qrSvg = await QRCode.toString(booking.qrCodeToken, {
     type: "svg",

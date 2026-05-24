@@ -42,7 +42,7 @@ export function BookingForm({
         return;
       }
 
-      router.push(`/ticket/${result.bookingId}`);
+      window.location.href = result.checkoutSessionUrl;
     });
   }
 
