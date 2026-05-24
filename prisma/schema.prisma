@@ -1,31 +1,227 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-generator client {
-  provider = "prisma-client-js"
+model Vehicle {
+  id           String    @id @default(uuid())
+  code         String    @unique
+  seatCapacity Int       @default(25)
+  active       Boolean   @default(true)
+  operatorId   String?
+  operator     Operator? @relation(fields: [operatorId], references: [id], onDelete: SetNull)
+  shifts       Shift[]
+
+  @@index([operatorId])
+}
+
+model Route {
+  id               String             @id @default(uuid())
+  kind             RouteKind          @unique
+  displayName      String
+  isPremium        Boolean            @default(false)
+  description      String?
+  operatorId       String?
+  operator         Operator?          @relation(fields: [operatorId], references: [id], onDelete: SetNull)
+  ScheduleTemplate ScheduleTemplate[]
+
+  @@index([operatorId])
+}
+
+model Trip {
+  id               String           @id @default(uuid())
+  templateId       String
+  serviceDate      DateTime         @db.Date
+  ScheduleTemplate ScheduleTemplate @relation(fields: [templateId], references: [id])
+  TripLeg          TripLeg[]
+  shift            Shift?
+
+  @@unique([templateId, serviceDate])
+  @@index([serviceDate])
+}
+
+model Booking {
+  id             String        @id @default(uuid())
+  reference      String        @unique
+  userId         String?
+  guestEmail     String?
+  guestFirstName String?
+  guestLastName  String?
+  guestPhone     String?
+  status         BookingStatus @default(PENDING_PAYMENT)
+  holdExpiresAt  DateTime?
+  subtotalCents  Int
+  gstCents       Int
+  totalCents     Int
+  currency       String        @default("CAD")
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime
+  User           User?         @relation(fields: [userId], references: [id])
+  BookingLeg     BookingLeg[]
+  payment        Payment?
+
+  @@index([status, holdExpiresAt])
+  @@index([userId])
+}
+
+model Payment {
+  id                      String        @id @default(uuid())
+  bookingId               String        @unique
+  stripeCheckoutSessionId String?       @unique
+  stripePaymentIntentId   String?       @unique
+  stripeCustomerId        String?
+  amountSubtotalCents     Int
+  gstCents                Int
+  amountTotalCents        Int
+  currency                String        @default("CAD")
+  status                  PaymentStatus @default(REQUIRES_PAYMENT)
+  createdAt               DateTime      @default(now())
+  updatedAt               DateTime      @updatedAt
+  booking                 Booking       @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+}
+
+model BookingLeg {
+  id             String        @id
+  bookingId      String
+  tripLegId      String
+  passengers     Int
+  unitPriceCents Int
+  boardedStatus  BoardedStatus @default(NOT_BOARDED)
+  boardedAt      DateTime?
+  Booking        Booking       @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  TripLeg        TripLeg       @relation(fields: [tripLegId], references: [id])
+
+  @@unique([bookingId, tripLegId])
+  @@index([tripLegId])
+}
+
+model LegTemplate {
+  id                                String           @id
+  templateId                        String
+  sequence                          Int
+  fromStopId                        String
+  toStopId                          String
+  departMin                         Int
+  arriveMin                         Int
+  bookable                          Boolean          @default(true)
+  priceCents                        Int
+  Stop_LegTemplate_fromStopIdToStop Stop             @relation("LegTemplate_fromStopIdToStop", fields: [fromStopId], references: [id])
+  ScheduleTemplate                  ScheduleTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  Stop_LegTemplate_toStopIdToStop   Stop             @relation("LegTemplate_toStopIdToStop", fields: [toStopId], references: [id])
+  TripLeg                           TripLeg[]
+}
+
+model ScheduleTemplate {
+  id          String        @id
+  routeId     String
+  label       String
+  sortOrder   Int
+  activeFrom  DateTime      @default(now())
+  activeUntil DateTime?
+  LegTemplate LegTemplate[]
+  Route       Route         @relation(fields: [routeId], references: [id])
+  Trip        Trip[]
+
+  @@index([routeId, sortOrder])
+}
+
+model Stop {
+  id                                       String        @id
+  code                                     String        @unique
+  name                                     String
+  lat                                      Float?
+  lng                                      Float?
+  notes                                    String?
+  LegTemplate_LegTemplate_fromStopIdToStop LegTemplate[] @relation("LegTemplate_fromStopIdToStop")
+  LegTemplate_LegTemplate_toStopIdToStop   LegTemplate[] @relation("LegTemplate_toStopIdToStop")
+}
+
+model TripLeg {
+  id            String       @id
+  tripId        String
+  legTemplateId String
+  departAt      DateTime
+  arriveAt      DateTime
+  seatsTotal    Int          @default(25)
+  seatsBooked   Int          @default(0)
+  BookingLeg    BookingLeg[]
+  LegTemplate   LegTemplate  @relation(fields: [legTemplateId], references: [id])
+  Trip          Trip         @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  @@unique([tripId, legTemplateId])
+  @@index([departAt])
+}
+
+model User {
+  id          String    @id
+  clerkUserId String?   @unique
+  email       String    @unique
+  firstName   String?
+  lastName    String?
+  phone       String?
+  createdAt   DateTime  @default(now())
+  Booking     Booking[]
+}
+
+enum PaymentStatus {
+  REQUIRES_PAYMENT
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+}
+
+enum BookingStatus {
+  PENDING_PAYMENT
+  CONFIRMED
+  CANCELLED
+  REFUNDED
+  EXPIRED
+}
+
+enum RouteKind {
+  SUNRISE_EXPRESS
+  DAYTIME_CIRCUIT
+  EVENING_RETURN
+}
+
+enum ShiftStatus {
+  SCHEDULED
+  EN_ROUTE
+  COMPLETED
+  CANCELLED
+}
+
+enum AdminRole {
+  SUPER_ADMIN
+  OPERATOR_ADMIN
+  SUPPORT
+}
+
+enum BoardedStatus {
+  NOT_BOARDED
+  BOARDED
+  NO_SHOW
 }
 
 model Operator {
-  id           String    @id @default(uuid())
-  businessName String
-  email        String    @unique
-  phone        String
-  vehicles     Vehicle[]
-  routes       Route[]
-  drivers      Driver[]
-  createdAt    DateTime  @default(now())
-}
-
-model Vehicle {
-  id          String   @id @default(uuid())
-  operatorId  String
-  operator    Operator @relation(fields: [operatorId], references: [id], onDelete: Cascade)
-  plateNumber String   @unique
-  makeModel   String
-  capacity    Int
-  shifts      Shift[]
+  id              String    @id @default(uuid())
+  businessName    String
+  email           String    @unique
+  phone           String
+  stripeAccountId String?   @unique
+  active          Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  vehicles        Vehicle[]
+  routes          Route[]
+  drivers         Driver[]
+  admins          Admin[]
+  shifts          Shift[]
 }
 
 model Driver {
@@ -35,60 +231,54 @@ model Driver {
   driverPin  String   @unique
   name       String
   phone      String
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
   shifts     Shift[]
+
+  @@index([operatorId])
 }
 
-model Route {
-  id          String   @id @default(uuid())
-  operatorId  String
-  operator    Operator @relation(fields: [operatorId], references: [id], onDelete: Cascade)
-  origin      String
-  destination String
-  basePrice   Float
-  trips       Trip[]
+model Admin {
+  id          String    @id @default(uuid())
+  clerkUserId String    @unique
+  email       String    @unique
+  name        String
+  role        AdminRole @default(SUPPORT)
+  operatorId  String?
+  operator    Operator? @relation(fields: [operatorId], references: [id], onDelete: SetNull)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([operatorId])
 }
 
-model Trip {
-  id            String  @id @default(uuid())
-  routeId       String
-  route         Route   @relation(fields: [routeId], references: [id], onDelete: Cascade)
-  departureTime String
-  arrivalTime   String
-  shifts        Shift[]
-}
-
+// A Shift binds a Vehicle + Driver to a specific Trip on its service date.
+// One Shift per Trip (the driver covers all TripLegs of that Trip in sequence).
+// Live telemetry (lat/lng) is updated by the driver terminal.
+//
+// Note: TripLeg.seatsTotal is independent of Vehicle.seatCapacity. When a
+// Vehicle is assigned to a Shift, callers should update the Trip's TripLeg
+// seatsTotal to match if capacity differs.
 model Shift {
-  id        String    @id @default(uuid())
-  vehicleId String
-  vehicle   Vehicle   @relation(fields: [vehicleId], references: [id])
-  driverId  String
-  driver    Driver    @relation(fields: [driverId], references: [id])
-  tripId    String
-  trip      Trip      @relation(fields: [tripId], references: [id])
-  date      DateTime
-  lat       Float?
-  lng       Float?
-  status    String    @default("SCHEDULED")
-  bookings  Booking[]
-  updatedAt DateTime  @updatedAt
+  id         String      @id @default(uuid())
+  operatorId String
+  operator   Operator    @relation(fields: [operatorId], references: [id], onDelete: Cascade)
+  vehicleId  String
+  vehicle    Vehicle     @relation(fields: [vehicleId], references: [id])
+  driverId   String
+  driver     Driver      @relation(fields: [driverId], references: [id])
+  tripId     String      @unique
+  trip       Trip        @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  status     ShiftStatus @default(SCHEDULED)
+  lat        Float?
+  lng        Float?
+  startedAt  DateTime?
+  endedAt    DateTime?
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
 
-  @@index([date, tripId])
+  @@index([operatorId])
+  @@index([vehicleId])
+  @@index([driverId])
   @@index([status])
-}
-
-model Booking {
-  id             String   @id @default(uuid())
-  shiftId        String
-  shift          Shift    @relation(fields: [shiftId], references: [id], onDelete: Cascade)
-  passengerName  String
-  passengerEmail String
-  passengerPhone String
-  seatCount      Int
-  qrCodeToken    String   @unique
-  paymentStatus  String   @default("PENDING")
-  boardedStatus  String   @default("NOT_BOARDED")
-  createdAt      DateTime @default(now())
-
-  @@index([shiftId])
-  @@index([qrCodeToken])
 }
