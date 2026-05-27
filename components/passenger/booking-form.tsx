@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,15 +8,14 @@ import { secureSeatBooking } from "@/app/actions/booking";
 import { formatMoney } from "@/lib/utils";
 
 export function BookingForm({
-  shiftId,
+  tripLegId,
   pricePerSeat,
   maxSeats,
 }: {
-  shiftId: string;
+  tripLegId: string;
   pricePerSeat: number;
   maxSeats: number;
 }) {
-  const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [seats, setSeats] = useState(1);
@@ -27,14 +25,18 @@ export function BookingForm({
     setError(null);
 
     const formData = new FormData(e.currentTarget);
+    const fullName = String(formData.get("passengerName")).trim();
+    const [first, ...rest] = fullName.split(/\s+/);
+    const last = rest.join(" ") || first;
 
     startTransition(async () => {
       const result = await secureSeatBooking({
-        shiftId,
-        passengerName: String(formData.get("passengerName")),
-        passengerEmail: String(formData.get("passengerEmail")),
-        passengerPhone: String(formData.get("passengerPhone")),
-        seatsRequested: seats,
+        tripLegIds: [tripLegId],
+        seats,
+        guestFirstName: first,
+        guestLastName: last,
+        guestEmail: String(formData.get("passengerEmail")),
+        guestPhone: String(formData.get("passengerPhone")),
       });
 
       if (!result.success) {
@@ -138,7 +140,7 @@ export function BookingForm({
         {pending ? "Reserving seat…" : `Confirm & pay ${formatMoney(total)}`}
       </Button>
       <p className="text-xs text-brand-muted text-center">
-        Stripe escrow holds funds until your ride is completed. 15% marketplace fee.
+        Stripe escrow holds funds until your ride is completed. 5% GST applied.
       </p>
     </form>
   );

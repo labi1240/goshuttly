@@ -42,7 +42,7 @@ export function QrScanner({
               return;
             }
             lastScanRef.current = { token: decoded, ts: now };
-            const result = await boardPassenger({ qrToken: decoded, shiftId });
+            const result = await boardPassenger({ passcode: decoded, shiftId });
             setFeedback(result);
             if (result.success && !result.alreadyBoarded) {
               try {

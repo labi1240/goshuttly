@@ -16,11 +16,24 @@ export default async function TrackPage({
   const shift = await prisma.shift.findUnique({
     where: { id: shiftId },
     include: {
-      vehicle: { select: { plateNumber: true, makeModel: true } },
-      trip: {
+      Vehicle: { select: { plateNumber: true, make: true, modelName: true } },
+      Trip: {
         include: {
-          route: {
-            include: { operator: { select: { businessName: true } } },
+          Template: {
+            include: {
+              Route: { include: { Company: { select: { displayName: true } } } },
+            },
+          },
+          TripLegs: {
+            include: {
+              LegTemplate: {
+                include: {
+                  FromStop: { select: { name: true } },
+                  ToStop: { select: { name: true } },
+                },
+              },
+            },
+            orderBy: { departAt: "asc" },
           },
         },
       },
@@ -29,16 +42,22 @@ export default async function TrackPage({
 
   if (!shift) notFound();
 
+  const firstLeg = shift.Trip.TripLegs[0];
+  const lastLeg = shift.Trip.TripLegs[shift.Trip.TripLegs.length - 1];
+  const origin = firstLeg?.LegTemplate.FromStop.name ?? "—";
+  const destination = lastLeg?.LegTemplate.ToStop.name ?? "—";
+  const vehicleLabel = `${shift.Vehicle.make} ${shift.Vehicle.modelName}`;
+
   return (
     <div className="mx-auto max-w-4xl px-6 py-8">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
           <h1 className="text-2xl font-bold">
-            {shift.trip.route.origin} → {shift.trip.route.destination}
+            {origin} → {destination}
           </h1>
           <p className="text-sm text-brand-muted">
-            {shift.trip.route.operator.businessName} · {shift.vehicle.makeModel} ·{" "}
-            {formatDate(shift.date)}
+            {shift.Trip.Template.Route.Company.displayName} · {vehicleLabel} ·{" "}
+            {formatDate(shift.Trip.serviceDate)}
           </p>
         </div>
         <Badge

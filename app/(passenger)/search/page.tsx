@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { searchShifts } from "@/app/actions/search";
+import { searchLegs } from "@/app/actions/search";
 import { SearchForm } from "@/components/passenger/search-form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,7 +18,7 @@ export default async function SearchPage({
 
   const hasQuery = origin && destination;
   const results = hasQuery
-    ? await searchShifts({ origin, destination, date: new Date(date) })
+    ? await searchLegs({ origin, destination, date: new Date(date) })
     : [];
 
   return (
@@ -61,11 +61,11 @@ export default async function SearchPage({
                     <span>{s.operatorName}</span>
                     <span>·</span>
                     <span>{s.vehicleLabel}</span>
-                    {s.status === "EN_ROUTE" && (
+                    {s.status === "BOARDING" || s.status === "IN_TRANSIT" ? (
                       <Badge variant="success" className="ml-1">
-                        EN ROUTE
+                        {s.status}
                       </Badge>
-                    )}
+                    ) : null}
                   </div>
                   <div className="mt-2 flex items-center gap-4">
                     <div>
@@ -99,6 +99,7 @@ export default async function SearchPage({
                       {s.seatsAvailable === 0 ? "Sold out" : "Book"}
                     </Link>
                   </Button>
+                  {/* /book/[legId] — the search result id is a TripLeg id. */}
                 </div>
               </CardContent>
             </Card>

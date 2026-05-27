@@ -4,26 +4,42 @@ import { BookingForm } from "@/components/passenger/booking-form";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatMoney, formatDate } from "@/lib/utils";
 
+function hhmm(date: Date): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+}
+
 export default async function BookPage({
   params,
 }: {
-  params: Promise<{ shiftId: string }>;
+  params: Promise<{ legId: string }>;
 }) {
-  const { shiftId } = await params;
+  const { legId } = await params;
 
-  const shift = await prisma.shift.findUnique({
-    where: { id: shiftId },
+  const leg = await prisma.tripLeg.findUnique({
+    where: { id: legId },
     include: {
-      vehicle: true,
-      trip: { include: { route: { include: { operator: true } } } },
-      bookings: { select: { seatCount: true } },
+      LegTemplate: { include: { FromStop: true, ToStop: true } },
+      Trip: {
+        include: {
+          Template: { include: { Route: { include: { Company: true } } } },
+        },
+      },
+      Shift: { include: { Vehicle: true } },
     },
   });
 
-  if (!shift) notFound();
+  if (!leg) notFound();
 
-  const booked = shift.bookings.reduce((sum, b) => sum + b.seatCount, 0);
-  const available = shift.vehicle.capacity - booked;
+  const available = Math.max(leg.seatsTotal - leg.seatsBooked, 0);
+  const pricePerSeat = leg.LegTemplate.priceCents / 100;
+  const route = leg.Trip.Template.Route;
+  const vehicleLabel = leg.Shift?.Vehicle
+    ? `${leg.Shift.Vehicle.make} ${leg.Shift.Vehicle.modelName}`
+    : "TBD";
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-10">
@@ -31,8 +47,7 @@ export default async function BookPage({
         Confirm your booking
       </h1>
       <p className="mt-1 text-sm text-brand-muted">
-        {shift.trip.route.operator.businessName} ·{" "}
-        {formatDate(shift.date)}
+        {route.Company.displayName} · {formatDate(leg.Trip.serviceDate)}
       </p>
 
       <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -41,20 +56,18 @@ export default async function BookPage({
             <CardTitle>Trip details</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
-            <Row label="From" value={shift.trip.route.origin} />
-            <Row label="To" value={shift.trip.route.destination} />
-            <Row label="Departure" value={shift.trip.departureTime} />
-            <Row label="Arrival" value={shift.trip.arrivalTime} />
-            <Row label="Vehicle" value={shift.vehicle.makeModel} />
+            <Row label="From" value={leg.LegTemplate.FromStop.name} />
+            <Row label="To" value={leg.LegTemplate.ToStop.name} />
+            <Row label="Departure" value={hhmm(leg.departAt)} />
+            <Row label="Arrival" value={hhmm(leg.arriveAt)} />
+            <Row label="Vehicle" value={vehicleLabel} />
             <Row
               label="Seats available"
-              value={`${available} of ${shift.vehicle.capacity}`}
+              value={`${available} of ${leg.seatsTotal}`}
             />
             <div className="pt-3 mt-3 border-t border-brand-border flex items-center justify-between">
               <span className="font-medium">Price per seat</span>
-              <span className="font-bold">
-                {formatMoney(shift.trip.route.basePrice)}
-              </span>
+              <span className="font-bold">{formatMoney(pricePerSeat)}</span>
             </div>
           </CardContent>
         </Card>
@@ -65,8 +78,8 @@ export default async function BookPage({
           </CardHeader>
           <CardContent>
             <BookingForm
-              shiftId={shift.id}
-              pricePerSeat={shift.trip.route.basePrice}
+              tripLegId={leg.id}
+              pricePerSeat={pricePerSeat}
               maxSeats={Math.min(available, 8)}
             />
           </CardContent>
