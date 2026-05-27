@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { listDriverShiftsForToday } from "@/app/actions/driver";
-import { formatDate } from "@/lib/utils";
+import { formatDate, formatTime } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
@@ -39,10 +39,17 @@ export default async function SelectShiftPage({
       ) : (
         <div className="space-y-3">
           {shifts.map((s) => {
-            const booked = s.bookings.reduce(
-              (sum, b) => sum + b.seatCount,
-              0,
-            );
+            const tripLegs = s.trip.TripLeg;
+            const firstLeg = tripLegs[0];
+            const lastLeg = tripLegs[tripLegs.length - 1];
+
+            const departureTime = firstLeg ? formatTime(firstLeg.departAt) : "TBD";
+            const origin = firstLeg?.LegTemplate.fromStop.name ?? "TBD";
+            const destination = lastLeg?.LegTemplate.toStop.name ?? "TBD";
+
+            // Peak seat occupancy across all legs on this shift
+            const booked = Math.max(...tripLegs.map((l) => l.seatsBooked), 0);
+
             return (
               <Link
                 key={s.id}
@@ -51,7 +58,7 @@ export default async function SelectShiftPage({
               >
                 <div className="flex items-center justify-between">
                   <div className="text-2xl font-bold tabular-nums">
-                    {s.trip.departureTime}
+                    {departureTime}
                   </div>
                   <span
                     className={
@@ -67,12 +74,12 @@ export default async function SelectShiftPage({
                   </span>
                 </div>
                 <div className="mt-2 text-sm">
-                  {s.trip.route.origin} → {s.trip.route.destination}
+                  {origin} → {destination}
                 </div>
                 <div className="mt-3 flex items-center justify-between text-xs text-white/60">
-                  <span>{s.vehicle.makeModel} · {s.vehicle.plateNumber}</span>
+                  <span>Vehicle {s.vehicle.code}</span>
                   <span className="tabular-nums">
-                    {booked}/{s.vehicle.capacity} seats
+                    {booked}/{s.vehicle.seatCapacity} seats
                   </span>
                 </div>
               </Link>

@@ -3,7 +3,7 @@
 import { prisma } from "@/lib/prisma";
 import { startOfDay, endOfDay } from "@/lib/utils";
 
-export type ShiftSearchResult = {
+export type LegSearchResult = {
   id: string;
   date: Date;
   status: string;
@@ -19,49 +19,82 @@ export type ShiftSearchResult = {
   seatsAvailable: number;
 };
 
-export async function searchShifts(params: {
+function hhmm(date: Date): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+}
+
+export async function searchLegs(params: {
   origin: string;
   destination: string;
   date: Date;
-}): Promise<ShiftSearchResult[]> {
-  const shifts = await prisma.shift.findMany({
+}): Promise<LegSearchResult[]> {
+  const legs = await prisma.tripLeg.findMany({
     where: {
-      date: {
+      departAt: {
         gte: startOfDay(params.date),
         lte: endOfDay(params.date),
       },
-      status: { in: ["SCHEDULED", "EN_ROUTE"] },
-      trip: {
-        route: {
-          origin: { contains: params.origin, mode: "insensitive" },
-          destination: { contains: params.destination, mode: "insensitive" },
+      LegTemplate: {
+        bookable: true,
+        fromStop: {
+          name: { contains: params.origin, mode: "insensitive" },
+        },
+        toStop: {
+          name: { contains: params.destination, mode: "insensitive" },
+        },
+      },
+      Trip: {
+        shift: {
+          status: { in: ["SCHEDULED", "EN_ROUTE"] },
         },
       },
     },
     include: {
-      vehicle: true,
-      trip: { include: { route: { include: { operator: true } } } },
-      bookings: { select: { seatCount: true } },
+      LegTemplate: {
+        include: {
+          fromStop: true,
+          toStop: true,
+        },
+      },
+      Trip: {
+        include: {
+          ScheduleTemplate: {
+            include: {
+              Route: { include: { operator: true } },
+            },
+          },
+          shift: { include: { vehicle: true } },
+        },
+      },
     },
-    orderBy: { date: "asc" },
+    orderBy: { departAt: "asc" },
   });
 
-  return shifts.map((s) => {
-    const booked = s.bookings.reduce((sum, b) => sum + b.seatCount, 0);
+  return legs.map((leg) => {
+    const route = leg.Trip.ScheduleTemplate.Route;
+    const shift = leg.Trip.shift;
+    const fromStop = leg.LegTemplate.fromStop;
+    const toStop = leg.LegTemplate.toStop;
+    const booked = leg.seatsBooked;
+
     return {
-      id: s.id,
-      date: s.date,
-      status: s.status,
-      departureTime: s.trip.departureTime,
-      arrivalTime: s.trip.arrivalTime,
-      origin: s.trip.route.origin,
-      destination: s.trip.route.destination,
-      basePrice: s.trip.route.basePrice,
-      operatorName: s.trip.route.operator.businessName,
-      vehicleLabel: `${s.vehicle.makeModel} · ${s.vehicle.plateNumber}`,
-      capacity: s.vehicle.capacity,
+      id: leg.id,
+      date: leg.Trip.serviceDate,
+      status: shift?.status ?? "SCHEDULED",
+      departureTime: hhmm(leg.departAt),
+      arrivalTime: hhmm(leg.arriveAt),
+      origin: fromStop.name,
+      destination: toStop.name,
+      basePrice: leg.LegTemplate.priceCents / 100,
+      operatorName: route.operator?.businessName ?? route.displayName,
+      vehicleLabel: shift?.vehicle.code ?? "TBD",
+      capacity: leg.seatsTotal,
       bookedSeats: booked,
-      seatsAvailable: s.vehicle.capacity - booked,
+      seatsAvailable: Math.max(leg.seatsTotal - booked, 0),
     };
   });
 }

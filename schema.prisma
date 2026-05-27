@@ -1,0 +1,525 @@
+// Shuttle Service - Prisma Schema (Canada)
+// Migrated from a parking-booking schema. Domain redesigned around
+// Routes, Vehicles, scheduled Trips, and seat-level Bookings.
+
+generator client {
+    provider = "prisma-client-js"
+}
+
+datasource db {
+    provider = "postgresql"
+    url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// AUTH & USERS
+// ============================================================
+
+model User {
+    uid       String   @id
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    name        String?
+    image       String?
+    phoneNumber String?
+
+    Credentials  Credentials?
+    AuthProvider AuthProvider?
+    Admin        Admin?
+    Operator     Operator?
+    Driver       Driver?
+    Passenger    Passenger?
+}
+
+model Credentials {
+    uid          String   @id
+    User         User     @relation(fields: [uid], references: [uid])
+    email        String   @unique
+    passwordHash String
+    createdAt    DateTime @default(now())
+    updatedAt    DateTime @updatedAt
+}
+
+model AuthProvider {
+    uid  String           @id
+    type AuthProviderType
+    User User             @relation(fields: [uid], references: [uid])
+}
+
+enum AuthProviderType {
+    GOOGLE
+    APPLE
+    CREDENTIALS
+}
+
+// ============================================================
+// ROLES
+// ============================================================
+
+model Admin {
+    uid       String   @id
+    User      User     @relation(fields: [uid], references: [uid])
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    CompanyVerifications CompanyVerification[]
+    DriverVerifications  DriverVerification[]
+    VehicleVerifications VehicleVerification[]
+}
+
+model Passenger {
+    uid       String   @id
+    User      User     @relation(fields: [uid], references: [uid])
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    displayName           String?
+    emergencyContactName  String?
+    emergencyContactPhone String?
+
+    Bookings Booking[]
+    Reviews  Review[]
+}
+
+// Operator = company owner / dispatcher who registers the shuttle company
+model Operator {
+    uid       String   @id
+    User      User     @relation(fields: [uid], references: [uid])
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    displayName String?
+
+    companyId       Int?              @unique
+    Company         ShuttleCompany?   @relation(fields: [companyId], references: [id])
+    BookingTimeline BookingTimeline[]
+}
+
+model Driver {
+    uid       String   @id
+    User      User     @relation(fields: [uid], references: [uid])
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    displayName String
+    image       String?
+
+    // Canadian driver licensing
+    licenceNumber   String        @default("")
+    licenceClass    LicenceClass  @default(CLASS_4) // Class 4 needed for shuttles in most provinces
+    licenceProvince Province?
+    licenceExpiry   DateTime?
+
+    companyId Int?
+    Company   ShuttleCompany? @relation(fields: [companyId], references: [id])
+
+    Trips           Trip[]
+    BookingTimeline BookingTimeline[]
+    Verification    DriverVerification?
+
+    @@unique([companyId, uid])
+}
+
+// ============================================================
+// COMPANY (Shuttle Operator Company)
+// ============================================================
+
+model ShuttleCompany {
+    id        Int      @id @default(autoincrement())
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    displayName String?
+    description String?
+
+    // Canada-specific
+    legalName      String?
+    businessNumber String? @unique // CRA Business Number
+    gstHstNumber   String?
+
+    HeadOfficeAddress Address?
+    Operators         Operator[]
+    Drivers           Driver[]
+    Vehicles          Vehicle[]
+    Routes            Route[]
+    Reviews           Review[]
+    Verification      CompanyVerification?
+}
+
+// Company head-office address (separate concept from passenger Stops)
+model Address {
+    id         Int      @id @default(autoincrement())
+    createdAt  DateTime @default(now())
+    updatedAt  DateTime @updatedAt
+
+    address    String
+    city       String
+    province   Province
+    postalCode String
+    country    String   @default("CA")
+    lat        Float?
+    lng        Float?
+
+    companyId Int            @unique
+    Company   ShuttleCompany @relation(fields: [companyId], references: [id])
+}
+
+// ============================================================
+// VEHICLES (Shuttles)
+// ============================================================
+
+model Vehicle {
+    id        Int      @id @default(autoincrement())
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    make        String
+    modelName   String
+    year        Int
+    colour      String?
+    plateNumber String  @unique
+    vin         String? @unique
+    capacity    Int // total passenger seats
+    type        VehicleType @default(SHUTTLE_VAN)
+    images      String[]
+
+    // Compliance docs
+    insuranceProvider String?
+    insurancePolicy   String?
+    insuranceExpiry   DateTime?
+    inspectionExpiry  DateTime?
+
+    companyId    Int
+    Company      ShuttleCompany       @relation(fields: [companyId], references: [id])
+    Trips        Trip[]
+    Verification VehicleVerification?
+}
+
+enum VehicleType {
+    SHUTTLE_VAN
+    MINI_BUS
+    COACH_BUS
+    SUV
+    SEDAN
+}
+
+// ============================================================
+// ROUTES & STOPS
+// ============================================================
+
+model Route {
+    id        Int      @id @default(autoincrement())
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    displayName           String?
+    description           String?
+    basePricePerSeat      Float // CAD
+    estimatedDurationMins Int?
+
+    companyId Int
+    Company   ShuttleCompany @relation(fields: [companyId], references: [id])
+    Stops     RouteStop[]
+    Trips     Trip[]
+}
+
+// Passenger-facing pickup/dropoff location
+model Stop {
+    id        Int      @id @default(autoincrement())
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    name       String
+    address    String
+    city       String
+    province   Province
+    postalCode String?
+    country    String   @default("CA")
+    lat        Float
+    lng        Float
+
+    RouteStops      RouteStop[]
+    PickupBookings  Booking[]   @relation("PickupStop")
+    DropoffBookings Booking[]   @relation("DropoffStop")
+}
+
+// Junction: ordered stops along a route
+model RouteStop {
+    id       Int @id @default(autoincrement())
+    sequence Int // 0,1,2... in travel order
+
+    routeId Int
+    Route   Route @relation(fields: [routeId], references: [id])
+
+    stopId Int
+    Stop   Stop @relation(fields: [stopId], references: [id])
+
+    @@unique([routeId, sequence])
+    @@unique([routeId, stopId])
+}
+
+// ============================================================
+// TRIPS (a scheduled departure of a vehicle on a route)
+// ============================================================
+
+model Trip {
+    id        Int      @id @default(autoincrement())
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    departureTime  DateTime
+    arrivalTime    DateTime // estimated
+    availableSeats Int      // decremented as bookings come in
+    pricePerSeat   Float    // may override Route.basePricePerSeat
+
+    status TripStatus @default(SCHEDULED)
+
+    // Live tracking (optional, updated by driver app)
+    currentLat Float?
+    currentLng Float?
+
+    routeId Int
+    Route   Route @relation(fields: [routeId], references: [id])
+
+    vehicleId Int
+    Vehicle   Vehicle @relation(fields: [vehicleId], references: [id])
+
+    driverId String?
+    Driver   Driver? @relation(fields: [driverId], references: [uid])
+
+    Bookings Booking[]
+    Reviews  Review[]
+
+    @@index([departureTime])
+    @@index([routeId, departureTime])
+}
+
+enum TripStatus {
+    SCHEDULED
+    BOARDING
+    IN_TRANSIT
+    COMPLETED
+    CANCELLED
+}
+
+// ============================================================
+// BOOKINGS
+// ============================================================
+
+model Booking {
+    id        Int      @id @default(autoincrement())
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    seatsBooked  Int   @default(1)
+    pricePerSeat Float?
+
+    // Canadian tax breakdown (varies by province)
+    subtotal   Float?
+    gst        Float? // 5% federal
+    hst        Float? // ON, NB, NL, NS, PE (harmonized)
+    pst        Float? // BC, SK, MB, QC (provincial)
+    totalPrice Float?
+    currency   String @default("CAD")
+
+    passengerName String?
+    phoneNumber   String?
+    passcode      String? // boarding code (QR)
+
+    status BookingStatus @default(BOOKED)
+
+    tripId Int
+    Trip   Trip @relation(fields: [tripId], references: [id])
+
+    pickupStopId Int
+    PickupStop   Stop @relation("PickupStop", fields: [pickupStopId], references: [id])
+
+    dropoffStopId Int
+    DropoffStop   Stop @relation("DropoffStop", fields: [dropoffStopId], references: [id])
+
+    passengerId String
+    Passenger   Passenger @relation(fields: [passengerId], references: [uid])
+
+    Payment         Payment?
+    BookingTimeline BookingTimeline[]
+
+    @@index([tripId])
+    @@index([passengerId])
+}
+
+enum BookingStatus {
+    BOOKED       // created, awaiting payment
+    CONFIRMED    // paid, seat held
+    BOARDED      // passenger boarded shuttle
+    IN_TRANSIT
+    COMPLETED
+    CANCELLED
+    NO_SHOW
+    REFUNDED
+}
+
+model BookingTimeline {
+    id        Int           @id @default(autoincrement())
+    timestamp DateTime      @default(now())
+    status    BookingStatus
+    note      String?
+
+    bookingId Int
+    Booking   Booking @relation(fields: [bookingId], references: [id])
+
+    driverId String?
+    Driver   Driver? @relation(fields: [driverId], references: [uid])
+
+    operatorId String?
+    Operator   Operator? @relation(fields: [operatorId], references: [uid])
+
+    @@index([bookingId])
+}
+
+// ============================================================
+// PAYMENTS
+// ============================================================
+
+model Payment {
+    id        Int      @id @default(autoincrement())
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    amount   Float
+    currency String @default("CAD")
+
+    provider          PaymentProvider @default(STRIPE)
+    providerPaymentId String?         @unique
+    method            PaymentMethod?
+    status            PaymentStatus   @default(PENDING)
+
+    refundedAmount Float?
+    refundedAt     DateTime?
+
+    bookingId Int     @unique
+    Booking   Booking @relation(fields: [bookingId], references: [id])
+}
+
+enum PaymentProvider {
+    STRIPE
+    INTERAC
+    PAYPAL
+    CASH
+}
+
+enum PaymentMethod {
+    CREDIT_CARD
+    DEBIT_CARD
+    INTERAC_ETRANSFER
+    APPLE_PAY
+    GOOGLE_PAY
+    CASH
+}
+
+enum PaymentStatus {
+    PENDING
+    SUCCEEDED
+    FAILED
+    REFUNDED
+    PARTIALLY_REFUNDED
+}
+
+// ============================================================
+// REVIEWS
+// ============================================================
+
+model Review {
+    id        Int      @id @default(autoincrement())
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    rating  Int     @default(0)
+    comment String?
+
+    passengerId String
+    Passenger   Passenger @relation(fields: [passengerId], references: [uid])
+
+    // A review can target a trip and/or the operator company
+    tripId Int?
+    Trip   Trip? @relation(fields: [tripId], references: [id])
+
+    companyId Int?
+    Company   ShuttleCompany? @relation(fields: [companyId], references: [id])
+
+    @@index([companyId])
+    @@index([tripId])
+}
+
+// ============================================================
+// VERIFICATIONS (admin-driven approvals)
+// ============================================================
+
+model CompanyVerification {
+    createdAt       DateTime @default(now())
+    updatedAt       DateTime @updatedAt
+    verified        Boolean  @default(false)
+    rejectionReason String?
+
+    adminId String
+    Admin   Admin  @relation(fields: [adminId], references: [uid])
+
+    companyId Int            @id
+    Company   ShuttleCompany @relation(fields: [companyId], references: [id])
+}
+
+model DriverVerification {
+    createdAt             DateTime @default(now())
+    updatedAt             DateTime @updatedAt
+    verified              Boolean  @default(false)
+    backgroundCheckPassed Boolean  @default(false)
+    rejectionReason       String?
+
+    adminId String
+    Admin   Admin  @relation(fields: [adminId], references: [uid])
+
+    driverId String @id
+    Driver   Driver @relation(fields: [driverId], references: [uid])
+}
+
+model VehicleVerification {
+    createdAt       DateTime @default(now())
+    updatedAt       DateTime @updatedAt
+    verified        Boolean  @default(false)
+    rejectionReason String?
+
+    adminId String
+    Admin   Admin  @relation(fields: [adminId], references: [uid])
+
+    vehicleId Int     @id
+    Vehicle   Vehicle @relation(fields: [vehicleId], references: [id])
+}
+
+// ============================================================
+// CANADA ENUMS
+// ============================================================
+
+enum Province {
+    AB // Alberta
+    BC // British Columbia
+    MB // Manitoba
+    NB // New Brunswick
+    NL // Newfoundland and Labrador
+    NS // Nova Scotia
+    NT // Northwest Territories
+    NU // Nunavut
+    ON // Ontario
+    PE // Prince Edward Island
+    QC // Quebec
+    SK // Saskatchewan
+    YT // Yukon
+}
+
+enum LicenceClass {
+    CLASS_1
+    CLASS_2
+    CLASS_3
+    CLASS_4 // taxi/limo/small bus — required for most shuttle ops
+    CLASS_5
+    CLASS_6
+}

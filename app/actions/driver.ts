@@ -21,16 +21,45 @@ export async function resolveDriverShifts(pin: string) {
 
 export async function listDriverShiftsForToday(driverId: string) {
   const today = new Date();
-  return prisma.shift.findMany({
+  const shifts = await prisma.shift.findMany({
     where: {
       driverId,
-      date: { gte: startOfDay(today), lte: endOfDay(today) },
+      trip: {
+        serviceDate: { gte: startOfDay(today), lte: endOfDay(today) },
+      },
     },
     include: {
       vehicle: true,
-      trip: { include: { route: true } },
-      bookings: { select: { seatCount: true, boardedStatus: true } },
+      trip: {
+        include: {
+          ScheduleTemplate: {
+            include: {
+              Route: true,
+            },
+          },
+          TripLeg: {
+            include: {
+              LegTemplate: {
+                include: {
+                  fromStop: true,
+                  toStop: true,
+                },
+              },
+            },
+            orderBy: {
+              departAt: "asc",
+            },
+          },
+        },
+      },
     },
-    orderBy: { date: "asc" },
+  });
+
+  // Sort by earliest leg's departure time in memory
+  return shifts.sort((a, b) => {
+    const aTime = a.trip.TripLeg[0]?.departAt?.getTime() ?? 0;
+    const bTime = b.trip.TripLeg[0]?.departAt?.getTime() ?? 0;
+    return aTime - bTime;
   });
 }
+
