@@ -53,6 +53,10 @@ model User {
   sessions      Session[]
   accounts      Account[]
 
+  // better-auth organization plugin
+  Memberships       Member[]
+  SentInvitations   Invitation[] @relation("InvitationInviter")
+
   @@unique([email])
 }
 
@@ -125,6 +129,13 @@ model Operator {
   companyId       String?
   Company         ShuttleCompany?   @relation(fields: [companyId], references: [id])
   BookingTimeline BookingTimeline[]
+
+  // 1:1 link to better-auth's Member row. Nullable for backfill of existing
+  // Operators created before the org plugin landed. App layer keeps
+  // Operator.role and Member.role in sync; Operator.role is authoritative
+  // for business logic, Member.role drives better-auth permission checks.
+  memberId String? @unique
+  Member   Member? @relation(fields: [memberId], references: [id], onDelete: SetNull)
 
   @@index([companyId])
 }
@@ -206,6 +217,13 @@ model ShuttleCompany {
   refundPartialPercent     Int @default(50)
 
   active Boolean @default(true)
+
+  // 1:1 link to better-auth's Organization row. Nullable for backfill of
+  // companies created before the org plugin landed. SetNull (not Cascade)
+  // because ShuttleCompany has CRA-retained financial records that must
+  // outlive any auth-side org deletion.
+  organizationId String?       @unique
+  Organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
 
   HeadOfficeAddress   Address?
   Operators           Operator[]
@@ -1141,15 +1159,17 @@ enum LicenceClass {
 }
 
 model Session {
-  id        String   @id
-  expiresAt DateTime
-  token     String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  ipAddress String?
-  userAgent String?
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id                   String   @id
+  expiresAt            DateTime
+  token                String
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  ipAddress            String?
+  userAgent            String?
+  userId               String
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Set by the organization plugin when the user switches active org.
+  activeOrganizationId String?
 
   @@unique([token])
   @@index([userId])
@@ -1186,4 +1206,71 @@ model Verification {
 
   @@index([identifier])
   @@map("verification")
+}
+
+// ============================================================
+// ORGANIZATION PLUGIN (better-auth)
+// ============================================================
+
+// Authoritative source for membership/invitations as seen by better-auth.
+// 1:1 linked to ShuttleCompany via ShuttleCompany.organizationId. The
+// app-layer creates BOTH rows together inside a single transaction.
+
+model Organization {
+  id        String    @id @default(uuid())
+  name      String
+  slug      String    @unique
+  logo      String?
+  metadata  Json?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime? @updatedAt
+
+  Members     Member[]
+  Invitations Invitation[]
+  Company     ShuttleCompany?
+
+  @@map("organization")
+}
+
+// 1:1 linked to Operator via Operator.memberId. better-auth queries this
+// table for permission checks; Operator carries the rich business fields
+// (companyId scoping, displayName, BookingTimeline relation).
+//
+// role is a free-form string at the DB level. Default better-auth roles
+// are "owner" | "admin" | "member"; we keep those for now and map
+// Operator.role <-> Member.role in application code. A follow-up will
+// configure custom roles to match OperatorRole exactly.
+
+model Member {
+  id             String   @id @default(uuid())
+  organizationId String
+  userId         String
+  role           String   @default("member")
+  createdAt      DateTime @default(now())
+
+  Organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  User         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  Operator     Operator?
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+  @@map("member")
+}
+
+model Invitation {
+  id             String   @id @default(uuid())
+  organizationId String
+  email          String
+  role           String
+  status         String   @default("pending") // pending | accepted | rejected | canceled
+  expiresAt      DateTime
+  inviterId      String
+  createdAt      DateTime @default(now())
+
+  Organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  Inviter      User         @relation("InvitationInviter", fields: [inviterId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
+  @@index([email])
+  @@map("invitation")
 }
