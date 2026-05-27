@@ -40,58 +40,63 @@ export async function searchLegs(params: {
       },
       LegTemplate: {
         bookable: true,
-        fromStop: {
+        FromStop: {
           name: { contains: params.origin, mode: "insensitive" },
         },
-        toStop: {
+        ToStop: {
           name: { contains: params.destination, mode: "insensitive" },
         },
       },
       Trip: {
-        shift: {
-          status: { in: ["SCHEDULED", "EN_ROUTE"] },
-        },
+        status: { in: ["SCHEDULED", "BOARDING"] },
       },
     },
     include: {
       LegTemplate: {
         include: {
-          fromStop: true,
-          toStop: true,
+          FromStop: true,
+          ToStop: true,
         },
       },
       Trip: {
         include: {
-          ScheduleTemplate: {
+          Template: {
             include: {
-              Route: { include: { operator: true } },
+              Route: { include: { Company: true } },
             },
           },
-          shift: { include: { vehicle: true } },
+          Shifts: {
+            include: { Vehicle: true },
+            take: 1,
+          },
         },
       },
+      Shift: { include: { Vehicle: true } },
     },
     orderBy: { departAt: "asc" },
   });
 
   return legs.map((leg) => {
-    const route = leg.Trip.ScheduleTemplate.Route;
-    const shift = leg.Trip.shift;
-    const fromStop = leg.LegTemplate.fromStop;
-    const toStop = leg.LegTemplate.toStop;
+    const route = leg.Trip.Template.Route;
+    // Prefer the Shift directly assigned to this leg; otherwise fall back
+    // to the first Shift on the parent Trip (covers single-shift trips
+    // before per-leg assignment is recorded).
+    const shift = leg.Shift ?? leg.Trip.Shifts[0] ?? null;
+    const fromStop = leg.LegTemplate.FromStop;
+    const toStop = leg.LegTemplate.ToStop;
     const booked = leg.seatsBooked;
 
     return {
       id: leg.id,
       date: leg.Trip.serviceDate,
-      status: shift?.status ?? "SCHEDULED",
+      status: leg.Trip.status,
       departureTime: hhmm(leg.departAt),
       arrivalTime: hhmm(leg.arriveAt),
       origin: fromStop.name,
       destination: toStop.name,
       basePrice: leg.LegTemplate.priceCents / 100,
-      operatorName: route.operator?.businessName ?? route.displayName,
-      vehicleLabel: shift?.vehicle.code ?? "TBD",
+      operatorName: route.Company.displayName,
+      vehicleLabel: shift?.Vehicle.code ?? "TBD",
       capacity: leg.seatsTotal,
       bookedSeats: booked,
       seatsAvailable: Math.max(leg.seatsTotal - booked, 0),

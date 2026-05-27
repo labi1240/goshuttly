@@ -3,8 +3,9 @@ import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 
-// Releases seat holds for PENDING bookings whose checkout TTL has elapsed.
-// Triggered by Vercel Cron (see vercel.json / vercel.ts).
+// Releases seat holds for PENDING_PAYMENT bookings whose holdExpiresAt has
+// elapsed. Triggered by Vercel Cron (see vercel.json). Multi-leg bookings
+// release seats on every BookingLeg they hold.
 export async function GET(req: NextRequest) {
   const cronSecret = process.env.CRON_SECRET;
   if (cronSecret) {
@@ -15,25 +16,47 @@ export async function GET(req: NextRequest) {
   }
 
   const expired = await prisma.booking.findMany({
-    where: { paymentStatus: "PENDING", holdExpiresAt: { lt: new Date() } },
-    select: { id: true, shiftId: true, seatCount: true },
+    where: {
+      status: "PENDING_PAYMENT",
+      holdExpiresAt: { lt: new Date() },
+    },
+    select: { id: true },
   });
 
   let released = 0;
   for (const b of expired) {
     try {
       await prisma.$transaction(async (tx) => {
-        // Guard against the webhook confirming the booking concurrently.
         const result = await tx.booking.updateMany({
-          where: { id: b.id, paymentStatus: "PENDING" },
-          data: { paymentStatus: "FAILED", holdExpiresAt: null },
+          where: { id: b.id, status: "PENDING_PAYMENT" },
+          data: { status: "EXPIRED", holdExpiresAt: null },
         });
         if (result.count === 0) return;
 
-        await tx.shift.update({
-          where: { id: b.shiftId },
-          data: { seatsBooked: { decrement: b.seatCount } },
+        const legs = await tx.bookingLeg.findMany({
+          where: { bookingId: b.id },
+          select: { tripLegId: true, passengers: true },
         });
+        for (const bl of legs) {
+          await tx.tripLeg.update({
+            where: { id: bl.tripLegId },
+            data: { seatsBooked: { decrement: bl.passengers } },
+          });
+        }
+
+        await tx.payment.updateMany({
+          where: { bookingId: b.id, status: "REQUIRES_PAYMENT" },
+          data: { status: "FAILED" },
+        });
+
+        await tx.bookingTimeline.create({
+          data: {
+            bookingId: b.id,
+            status: "EXPIRED",
+            note: "Hold expired; seats released by cron",
+          },
+        });
+
         released += 1;
       });
     } catch (err) {
