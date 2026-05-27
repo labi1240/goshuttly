@@ -30,7 +30,10 @@ datasource db {
 // ============================================================
 
 model User {
-  uid       String   @id @default(uuid())
+  // better-auth requires the PK to be exposed to its Prisma client as `id`.
+  // We keep the DB column named "uid" so no SQL migration is needed and so
+  // existing rows continue to satisfy FKs from Passenger/Operator/Driver/etc.
+  id        String   @id @default(uuid()) @map("uid")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -55,7 +58,7 @@ model User {
 
 model Credentials {
   uid          String   @id
-  User         User     @relation(fields: [uid], references: [uid])
+  User         User     @relation(fields: [uid], references: [id])
   email        String   @unique
   passwordHash String
   createdAt    DateTime @default(now())
@@ -66,7 +69,7 @@ model AuthProvider {
   uid        String           @id
   type       AuthProviderType
   externalId String? // Clerk/Auth0/Google subject if applicable
-  User       User             @relation(fields: [uid], references: [uid])
+  User       User             @relation(fields: [uid], references: [id])
 
   @@unique([type, externalId])
 }
@@ -84,7 +87,7 @@ enum AuthProviderType {
 
 model Admin {
   uid       String   @id
-  User      User     @relation(fields: [uid], references: [uid])
+  User      User     @relation(fields: [uid], references: [id])
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -96,7 +99,7 @@ model Admin {
 
 model Passenger {
   uid       String   @id
-  User      User     @relation(fields: [uid], references: [uid])
+  User      User     @relation(fields: [uid], references: [id])
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -112,7 +115,7 @@ model Passenger {
 
 model Operator {
   uid       String   @id
-  User      User     @relation(fields: [uid], references: [uid])
+  User      User     @relation(fields: [uid], references: [id])
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -135,7 +138,7 @@ enum OperatorRole {
 
 model Driver {
   uid       String   @id
-  User      User     @relation(fields: [uid], references: [uid])
+  User      User     @relation(fields: [uid], references: [id])
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -996,7 +999,7 @@ model DeviceToken {
   createdAt  DateTime       @default(now())
 
   userId String?
-  User   User?   @relation(fields: [userId], references: [uid], onDelete: Cascade)
+  User   User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   driverId String?
   Driver   Driver? @relation(fields: [driverId], references: [uid], onDelete: Cascade)
@@ -1146,7 +1149,7 @@ model Session {
   ipAddress String?
   userAgent String?
   userId    String
-  user      User     @relation(fields: [userId], references: [uid], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([token])
   @@index([userId])
@@ -1158,7 +1161,7 @@ model Account {
   accountId             String
   providerId            String
   userId                String
-  user                  User      @relation(fields: [userId], references: [uid], onDelete: Cascade)
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   accessToken           String?
   refreshToken          String?
   idToken               String?
