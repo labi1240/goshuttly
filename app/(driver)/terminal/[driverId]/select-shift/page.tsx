@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { listDriverShiftsForToday } from "@/app/actions/driver";
-import { formatDate } from "@/lib/utils";
+import { formatDate, formatTime } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +13,7 @@ export default async function SelectShiftPage({
 }) {
   const { driverId } = await params;
 
-  const driver = await prisma.driver.findUnique({ where: { id: driverId } });
+  const driver = await prisma.driver.findUnique({ where: { uid: driverId } });
   if (!driver) notFound();
 
   const shifts = await listDriverShiftsForToday(driverId);
@@ -22,10 +22,8 @@ export default async function SelectShiftPage({
     <div className="max-w-md mx-auto px-4 py-8">
       <div className="mb-6">
         <p className="text-sm text-white/60">Welcome,</p>
-        <h1 className="text-2xl font-bold">{driver.name}</h1>
-        <p className="text-sm text-white/60 mt-1">
-          {formatDate(new Date())}
-        </p>
+        <h1 className="text-2xl font-bold">{driver.displayName}</h1>
+        <p className="text-sm text-white/60 mt-1">{formatDate(new Date())}</p>
       </div>
 
       <h2 className="text-sm uppercase tracking-wider text-white/60 mb-3">
@@ -39,10 +37,20 @@ export default async function SelectShiftPage({
       ) : (
         <div className="space-y-3">
           {shifts.map((s) => {
-            const booked = s.bookings.reduce(
-              (sum, b) => sum + b.seatCount,
-              0,
-            );
+            const tripLegs = s.Trip.TripLegs;
+            const firstLeg = tripLegs[0];
+            const lastLeg = tripLegs[tripLegs.length - 1];
+
+            const departureTime = firstLeg
+              ? formatTime(firstLeg.departAt)
+              : "TBD";
+            const origin = firstLeg?.LegTemplate.FromStop.name ?? "TBD";
+            const destination = lastLeg?.LegTemplate.ToStop.name ?? "TBD";
+
+            const booked = tripLegs.length
+              ? Math.max(...tripLegs.map((l) => l.seatsBooked))
+              : 0;
+
             return (
               <Link
                 key={s.id}
@@ -51,7 +59,7 @@ export default async function SelectShiftPage({
               >
                 <div className="flex items-center justify-between">
                   <div className="text-2xl font-bold tabular-nums">
-                    {s.trip.departureTime}
+                    {departureTime}
                   </div>
                   <span
                     className={
@@ -67,12 +75,12 @@ export default async function SelectShiftPage({
                   </span>
                 </div>
                 <div className="mt-2 text-sm">
-                  {s.trip.route.origin} → {s.trip.route.destination}
+                  {origin} → {destination}
                 </div>
                 <div className="mt-3 flex items-center justify-between text-xs text-white/60">
-                  <span>{s.vehicle.makeModel} · {s.vehicle.plateNumber}</span>
+                  <span>Vehicle {s.Vehicle.code}</span>
                   <span className="tabular-nums">
-                    {booked}/{s.vehicle.capacity} seats
+                    {booked}/{s.Vehicle.seatCapacity} seats
                   </span>
                 </div>
               </Link>
@@ -82,7 +90,10 @@ export default async function SelectShiftPage({
       )}
 
       <div className="mt-8 text-center">
-        <Link href="/terminal" className="text-sm text-white/50 hover:text-white">
+        <Link
+          href="/terminal"
+          className="text-sm text-white/50 hover:text-white"
+        >
           ← Sign out
         </Link>
       </div>

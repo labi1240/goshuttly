@@ -5,19 +5,50 @@ import { formatDate } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
+function hhmm(date: Date): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+}
+
 export default async function ShiftsPage() {
-  const operator = await prisma.operator.findFirst();
-  if (!operator) return null;
+  const operator = await prisma.operator.findFirst({
+    where: { companyId: { not: null } },
+  });
+  if (!operator || !operator.companyId) return null;
+  const companyId = operator.companyId;
 
   const shifts = await prisma.shift.findMany({
-    where: { vehicle: { operatorId: operator.id } },
+    where: { Vehicle: { companyId } },
     include: {
-      vehicle: true,
-      driver: true,
-      trip: { include: { route: true } },
-      bookings: { select: { seatCount: true, boardedStatus: true } },
+      Vehicle: true,
+      Driver: true,
+      Trip: {
+        include: {
+          TripLegs: {
+            include: {
+              LegTemplate: {
+                include: {
+                  FromStop: { select: { name: true } },
+                  ToStop: { select: { name: true } },
+                },
+              },
+            },
+            orderBy: { departAt: "asc" },
+          },
+        },
+      },
+      TripLegs: {
+        include: {
+          BookingLegs: {
+            select: { passengers: true, boardedStatus: true },
+          },
+        },
+      },
     },
-    orderBy: { date: "asc" },
+    orderBy: { createdAt: "asc" },
     take: 50,
   });
 
@@ -50,26 +81,39 @@ export default async function ShiftsPage() {
               </thead>
               <tbody className="divide-y divide-brand-border">
                 {shifts.map((s) => {
-                  const booked = s.bookings.reduce(
-                    (sum, b) => sum + b.seatCount,
+                  const tripLegs = s.Trip.TripLegs;
+                  const firstLeg = tripLegs[0];
+                  const lastLeg = tripLegs[tripLegs.length - 1];
+                  const booked = s.TripLegs.reduce(
+                    (sum, tl) =>
+                      sum +
+                      tl.BookingLegs.reduce((s2, bl) => s2 + bl.passengers, 0),
                     0,
                   );
-                  const boarded = s.bookings
-                    .filter((b) => b.boardedStatus === "BOARDED")
-                    .reduce((sum, b) => sum + b.seatCount, 0);
+                  const boarded = s.TripLegs.reduce(
+                    (sum, tl) =>
+                      sum +
+                      tl.BookingLegs.filter(
+                        (bl) => bl.boardedStatus === "BOARDED",
+                      ).reduce((s2, bl) => s2 + bl.passengers, 0),
+                    0,
+                  );
                   return (
                     <tr key={s.id}>
-                      <td className="py-3 pr-3">{formatDate(s.date)}</td>
+                      <td className="py-3 pr-3">
+                        {formatDate(s.Trip.serviceDate)}
+                      </td>
                       <td className="py-3 pr-3 tabular-nums">
-                        {s.trip.departureTime}
+                        {firstLeg ? hhmm(firstLeg.departAt) : "—"}
                       </td>
                       <td className="py-3 pr-3">
-                        {s.trip.route.origin} → {s.trip.route.destination}
+                        {firstLeg?.LegTemplate.FromStop.name ?? "—"} →{" "}
+                        {lastLeg?.LegTemplate.ToStop.name ?? "—"}
                       </td>
-                      <td className="py-3 pr-3">{s.vehicle.plateNumber}</td>
-                      <td className="py-3 pr-3">{s.driver.name}</td>
+                      <td className="py-3 pr-3">{s.Vehicle.plateNumber}</td>
+                      <td className="py-3 pr-3">{s.Driver.displayName}</td>
                       <td className="py-3 pr-3 tabular-nums">
-                        {booked}/{s.vehicle.capacity}
+                        {booked}/{s.Vehicle.seatCapacity}
                       </td>
                       <td className="py-3 pr-3 tabular-nums">{boarded}</td>
                       <td className="py-3 pr-3">

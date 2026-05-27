@@ -6,12 +6,38 @@ import { formatMoney, formatDate, startOfDay, endOfDay } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
-export default async function DashboardOverviewPage() {
-  const operator = await prisma.operator.findFirst({
-    include: { vehicles: true, drivers: true, routes: true },
-  });
+function hhmm(date: Date): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+}
 
-  if (!operator) {
+// TODO: read operator.uid from the better-auth session
+// (auth.api.getSession({ headers: await headers() })) and look up via uid.
+// For now we resolve the first Operator + Company to keep the dashboard
+// renderable in dev before session wiring is finished.
+async function resolveOperatorContext() {
+  const operator = await prisma.operator.findFirst({
+    where: { companyId: { not: null } },
+  });
+  if (!operator || !operator.companyId) return null;
+  const company = await prisma.shuttleCompany.findUnique({
+    where: { id: operator.companyId },
+    include: {
+      Vehicles: { select: { id: true } },
+      Drivers: { select: { uid: true } },
+      Routes: { select: { id: true } },
+    },
+  });
+  if (!company) return null;
+  return { operator, company };
+}
+
+export default async function DashboardOverviewPage() {
+  const ctx = await resolveOperatorContext();
+  if (!ctx) {
     return (
       <div className="rounded-lg border border-brand-border bg-white p-8 text-center">
         <h2 className="text-lg font-semibold">No operator data yet</h2>
@@ -23,61 +49,75 @@ export default async function DashboardOverviewPage() {
     );
   }
 
+  const { company } = ctx;
   const today = new Date();
-  const [shiftsToday, bookingsToday, activeShifts] = await Promise.all([
+
+  const [shiftsToday, paymentsTodayAgg, activeShifts] = await Promise.all([
     prisma.shift.findMany({
       where: {
-        date: { gte: startOfDay(today), lte: endOfDay(today) },
-        vehicle: { operatorId: operator.id },
+        Trip: { serviceDate: { gte: startOfDay(today), lte: endOfDay(today) } },
+        Vehicle: { companyId: company.id },
       },
       include: {
-        vehicle: true,
-        trip: { include: { route: true } },
-        bookings: { select: { seatCount: true } },
+        Vehicle: true,
+        Trip: {
+          include: {
+            Template: { include: { Route: true } },
+            TripLegs: {
+              include: {
+                LegTemplate: {
+                  include: {
+                    FromStop: { select: { name: true } },
+                    ToStop: { select: { name: true } },
+                  },
+                },
+              },
+              orderBy: { departAt: "asc" },
+            },
+          },
+        },
+        TripLegs: { select: { seatsBooked: true } },
       },
-      orderBy: { date: "asc" },
     }),
-    prisma.booking.findMany({
+    prisma.payment.aggregate({
       where: {
+        status: "SUCCEEDED",
+        companyId: company.id,
         createdAt: { gte: startOfDay(today), lte: endOfDay(today) },
-        shift: { vehicle: { operatorId: operator.id } },
       },
-      include: { shift: { include: { trip: { include: { route: true } } } } },
+      _sum: { amountTotalCents: true, applicationFeeCents: true },
+      _count: { _all: true },
     }),
     prisma.shift.count({
-      where: { status: "EN_ROUTE", vehicle: { operatorId: operator.id } },
+      where: { status: "EN_ROUTE", Vehicle: { companyId: company.id } },
     }),
   ]);
 
-  const grossToday = bookingsToday.reduce(
-    (sum, b) => sum + b.seatCount * b.shift.trip.route.basePrice,
-    0,
-  );
-  const operatorPayout = grossToday * 0.85;
+  const grossTodayCents = paymentsTodayAgg._sum.amountTotalCents ?? 0;
+  const feeTodayCents = paymentsTodayAgg._sum.applicationFeeCents ?? 0;
+  const netPayoutCad = (grossTodayCents - feeTodayCents) / 100;
+  const bookingsTodayCount = paymentsTodayAgg._count._all;
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold">{operator.businessName}</h1>
+        <h1 className="text-2xl font-bold">{company.displayName}</h1>
         <p className="text-sm text-brand-muted">
-          {formatDate(today)} · {operator.vehicles.length} vehicles ·{" "}
-          {operator.drivers.length} drivers · {operator.routes.length} routes
+          {formatDate(today)} · {company.Vehicles.length} vehicles ·{" "}
+          {company.Drivers.length} drivers · {company.Routes.length} routes
         </p>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <Stat label="Active shifts" value={String(activeShifts)} />
         <Stat label="Shifts today" value={String(shiftsToday.length)} />
-        <Stat label="Bookings today" value={String(bookingsToday.length)} />
-        <Stat
-          label="Net payout (85%)"
-          value={formatMoney(operatorPayout)}
-        />
+        <Stat label="Bookings today" value={String(bookingsTodayCount)} />
+        <Stat label="Net payout today" value={formatMoney(netPayoutCad)} />
       </div>
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle>Today's shifts</CardTitle>
+          <CardTitle>Today&apos;s shifts</CardTitle>
           <Link
             href="/dashboard/shifts"
             className="text-sm text-brand-blue hover:text-brand-blue-dark"
@@ -93,28 +133,29 @@ export default async function DashboardOverviewPage() {
           ) : (
             <div className="divide-y divide-brand-border">
               {shiftsToday.map((s) => {
-                const booked = s.bookings.reduce(
-                  (sum, b) => sum + b.seatCount,
+                const firstLeg = s.Trip.TripLegs[0];
+                const lastLeg = s.Trip.TripLegs[s.Trip.TripLegs.length - 1];
+                const seatsBookedTotal = s.TripLegs.reduce(
+                  (sum, tl) => sum + tl.seatsBooked,
                   0,
                 );
                 return (
-                  <div
-                    key={s.id}
-                    className="py-3 flex items-center gap-4"
-                  >
+                  <div key={s.id} className="py-3 flex items-center gap-4">
                     <div className="w-20 tabular-nums font-semibold">
-                      {s.trip.departureTime}
+                      {firstLeg ? hhmm(firstLeg.departAt) : "—"}
                     </div>
                     <div className="flex-1">
                       <div className="text-sm font-medium">
-                        {s.trip.route.origin} → {s.trip.route.destination}
+                        {firstLeg?.LegTemplate.FromStop.name ?? "—"} →{" "}
+                        {lastLeg?.LegTemplate.ToStop.name ?? "—"}
                       </div>
                       <div className="text-xs text-brand-muted">
-                        {s.vehicle.makeModel} · {s.vehicle.plateNumber}
+                        {s.Vehicle.make} {s.Vehicle.modelName} ·{" "}
+                        {s.Vehicle.plateNumber}
                       </div>
                     </div>
                     <div className="text-sm text-brand-muted tabular-nums">
-                      {booked}/{s.vehicle.capacity} seats
+                      {seatsBookedTotal} seats
                     </div>
                     <Badge
                       variant={
