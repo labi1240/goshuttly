@@ -22,6 +22,15 @@ export function formatDate(date: Date | string) {
   }).format(d);
 }
 
+export function formatTime(date: Date | string) {
+  const d = typeof date === "string" ? new Date(date) : date;
+  return new Intl.DateTimeFormat("en-CA", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(d);
+}
+
 export function startOfDay(date: Date) {
   const d = new Date(date);
   d.setHours(0, 0, 0, 0);

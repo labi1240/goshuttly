@@ -6,32 +6,65 @@ import { formatMoney, formatDate } from "@/lib/utils";
 export const dynamic = "force-dynamic";
 
 export default async function PayoutsPage() {
-  const operator = await prisma.operator.findFirst();
-  if (!operator) return null;
+  const operator = await prisma.operator.findFirst({
+    where: { companyId: { not: null } },
+  });
+  if (!operator || !operator.companyId) return null;
+  const companyId = operator.companyId;
 
-  const completedShifts = await prisma.shift.findMany({
-    where: { vehicle: { operatorId: operator.id }, status: "COMPLETED" },
+  // Payment-table driven. Each Booking has exactly one Payment; we aggregate
+  // successful payments scoped to this operator's company.
+  const payments = await prisma.payment.findMany({
+    where: { companyId, status: "SUCCEEDED" },
     include: {
-      trip: { include: { route: true } },
-      bookings: true,
+      Booking: {
+        include: {
+          BookingLegs: {
+            include: {
+              TripLeg: {
+                include: {
+                  LegTemplate: {
+                    include: {
+                      FromStop: { select: { name: true } },
+                      ToStop: { select: { name: true } },
+                    },
+                  },
+                  Trip: { select: { serviceDate: true } },
+                },
+              },
+            },
+            orderBy: { TripLeg: { departAt: "asc" } },
+          },
+        },
+      },
     },
-    orderBy: { date: "desc" },
+    orderBy: { createdAt: "desc" },
     take: 20,
   });
 
-  let totalGross = 0;
-  const rows = completedShifts.map((s) => {
-    const gross = s.bookings
-      .filter((b) => b.paymentStatus === "PAID")
-      .reduce((sum, b) => sum + b.seatCount * s.trip.route.basePrice, 0);
-    totalGross += gross;
+  let totalGrossCents = 0;
+  let totalFeeCents = 0;
+  let totalNetCents = 0;
+
+  const rows = payments.map((p) => {
+    totalGrossCents += p.amountTotalCents;
+    totalFeeCents += p.applicationFeeCents;
+    totalNetCents += p.operatorNetCents;
+
+    const firstLeg = p.Booking.BookingLegs[0];
+    const lastLeg = p.Booking.BookingLegs[p.Booking.BookingLegs.length - 1];
+
     return {
-      id: s.id,
-      date: s.date,
-      label: `${s.trip.route.origin} → ${s.trip.route.destination}`,
-      gross,
-      payout: gross * 0.85,
-      fee: gross * 0.15,
+      id: p.id,
+      date: p.createdAt,
+      serviceDate: firstLeg?.TripLeg.Trip.serviceDate ?? p.createdAt,
+      label:
+        firstLeg && lastLeg
+          ? `${firstLeg.TripLeg.LegTemplate.FromStop.name} → ${lastLeg.TripLeg.LegTemplate.ToStop.name}`
+          : p.Booking.reference,
+      grossCents: p.amountTotalCents,
+      feeCents: p.applicationFeeCents,
+      netCents: p.operatorNetCents,
     };
   });
 
@@ -40,26 +73,29 @@ export default async function PayoutsPage() {
       <h1 className="text-2xl font-bold">Payouts</h1>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <Stat label="Gross (completed)" value={formatMoney(totalGross)} />
-        <Stat label="Marketplace fee (15%)" value={formatMoney(totalGross * 0.15)} />
-        <Stat label="Net payout (85%)" value={formatMoney(totalGross * 0.85)} />
+        <Stat label="Gross collected" value={formatMoney(totalGrossCents / 100)} />
+        <Stat
+          label="Marketplace fee"
+          value={formatMoney(totalFeeCents / 100)}
+        />
+        <Stat label="Net payout" value={formatMoney(totalNetCents / 100)} />
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>Completed shifts</CardTitle>
+          <CardTitle>Recent payments</CardTitle>
         </CardHeader>
         <CardContent>
           {rows.length === 0 ? (
             <p className="text-sm text-brand-muted">
-              No completed shifts yet. Once a driver marks a shift complete, the
-              escrowed funds release here.
+              No payments collected yet. Once Stripe confirms a checkout, the
+              payment lands here.
             </p>
           ) : (
             <table className="w-full text-sm">
               <thead className="text-left text-brand-muted border-b border-brand-border">
                 <tr>
-                  <th className="py-2 pr-3 font-medium">Date</th>
+                  <th className="py-2 pr-3 font-medium">Service date</th>
                   <th className="py-2 pr-3 font-medium">Route</th>
                   <th className="py-2 pr-3 font-medium text-right">Gross</th>
                   <th className="py-2 pr-3 font-medium text-right">Fee</th>
@@ -70,16 +106,16 @@ export default async function PayoutsPage() {
               <tbody className="divide-y divide-brand-border">
                 {rows.map((r) => (
                   <tr key={r.id}>
-                    <td className="py-3 pr-3">{formatDate(r.date)}</td>
+                    <td className="py-3 pr-3">{formatDate(r.serviceDate)}</td>
                     <td className="py-3 pr-3">{r.label}</td>
                     <td className="py-3 pr-3 text-right tabular-nums">
-                      {formatMoney(r.gross)}
+                      {formatMoney(r.grossCents / 100)}
                     </td>
                     <td className="py-3 pr-3 text-right tabular-nums text-brand-muted">
-                      −{formatMoney(r.fee)}
+                      −{formatMoney(r.feeCents / 100)}
                     </td>
                     <td className="py-3 pr-3 text-right tabular-nums font-medium">
-                      {formatMoney(r.payout)}
+                      {formatMoney(r.netCents / 100)}
                     </td>
                     <td className="py-3 pr-3">
                       <Badge variant="success">RELEASED</Badge>
